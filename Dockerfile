@@ -1,84 +1,80 @@
-# Ubuntu 14.04 LTS
-FROM phusion/baseimage:0.9.18
+FROM php:5.6-apache
 
-ENV DEBIAN_FRONTEND noninteractive
+# Atualizar sources.list para usar archive.debian.org e remover stretch-updates
+RUN sed -i 's/deb.debian.org\/debian/archive.debian.org\/debian/g' /etc/apt/sources.list && \
+    sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list && \
+    sed -i '/stretch-updates/d' /etc/apt/sources.list && \
+    echo "Acquire::Check-Valid-Until false;" > /etc/apt/apt.conf.d/99no-check-valid-until
 
-RUN locale-gen pt_BR.UTF-8 en_US.UTF-8
+# Instalar dependências adicionais
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    libxml2-dev \
+    libcurl4-openssl-dev \
+    libreadline-dev \
+    zlib1g-dev \
+    libicu-dev \
+    locales \
+    unzip \
+    && docker-php-ext-install zip
+
+# Configurar locale
+RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
+    echo "pt_BR.UTF-8 UTF-8" >> /etc/locale.gen && \
+    locale-gen
+
 ENV LANG en_US.UTF-8
 ENV LC_ALL en_US.UTF-8
 
-RUN apt-get update && apt-get install -y software-properties-common
-RUN LC_ALL=en_US.UTF-8 apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C
-RUN LC_ALL=en_US.UTF-8 add-apt-repository -y ppa:ondrej/php
+# Instalar extensões PHP necessárias
+RUN docker-php-ext-install mbstring xmlrpc xml dom json
 
-################################################################################
-## INSTALL DEPENDENCIES ########################################################
-################################################################################
+# Configurar PHP
+RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini && \
+    sed -i.bak 's/upload_max_filesize = .*/upload_max_filesize = 15M/g' /usr/local/etc/php/php.ini && \
+    sed -i.bak 's/post_max_size = .*/post_max_size = 15M/g' /usr/local/etc/php/php.ini && \
+    sed -i.bak 's/;date.timezone =.*/date.timezone = America\/Sao_Paulo/g' /usr/local/etc/php/php.ini && \
+    sed -i.bak 's/short_open_tag = .*/short_open_tag = On/g' /usr/local/etc/php/php.ini
 
-RUN apt-get update
-RUN apt-key update
-RUN apt-get install -y curl
-RUN apt-get install -y git-core
-RUN apt-get install -y apache2
-RUN apt-get install -y php5.6
-RUN apt-get install -y php5.6-curl
-RUN apt-get install -y php5.6-xmlrpc
-RUN apt-get install -y php5.6-xml
-RUN apt-get install -y php5.6-json
-RUN apt-get install -y php5.6-mbstring
-
-RUN apt-get clean
-RUN phpenmod dom
-RUN phpenmod mbstring
-
-################################################################################
-# CONFIGURATIONS ###############################################################
-################################################################################
-
-RUN rm -fr /var/www/html
-ADD . /var/www/html
-WORKDIR /var/www/html
-
-RUN  sed -i.bak 's/upload_max_filesize = 2M/upload_max_filesize = 15M/g' /etc/php/5.6/apache2/php.ini && \
-     sed -i.bak 's/post_max_size = 8M/post_max_size = 15M/g' /etc/php/5.6/apache2/php.ini && \
-     sed -i.bak 's/short_open_tag = Off/short_open_tag = On/g' /etc/php/5.6/apache2/php.ini && \
-     sed -i.bak 's/;date.timezone =/date.timezone = America\/Sao_Paulo/g' /etc/php/5.6/apache2/php.ini
-
+# Habilitar módulos do Apache
 RUN a2enmod headers \
             actions \
             rewrite \
             expires \
             deflate
 
-# create the configuration file in the "available" section
-RUN echo "ServerName localhost" | tee /etc/apache2/conf-available/servername.conf
-# enable it by creating a symlink to it from the "enabled" section
-RUN sudo a2enconf servername
+# Configurar ServerName
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
-RUN mkdir -p /etc/service/apache
-ADD apache-init.sh /etc/service/apache/run
-RUN chmod +x /etc/service/apache/run
+# Adicionar configuração do Virtual Host
+COPY apache-vhost.conf /etc/apache2/sites-available/000-default.conf
 
+# Instalar Composer
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-################################################################################
-# Add altered apache vhost #####################################################
-################################################################################
+# Configurar usuário 'deployer'
+RUN groupadd -g 1000 deployer && \
+    useradd -u 1000 -g deployer -m deployer && \
+    chown -R deployer:deployer /var/www/html && \
+    sed -i 's/APACHE_RUN_USER=www-data/APACHE_RUN_USER=deployer/' /etc/apache2/envvars && \
+    sed -i 's/APACHE_RUN_GROUP=www-data/APACHE_RUN_GROUP=deployer/' /etc/apache2/envvars
 
-RUN rm -rf /etc/apache2/sites-available/* /etc/apache2/sites-enabled/*
-ADD apache-vhost.conf /etc/apache2/sites-available/apache-vhost.conf
-RUN ln /etc/apache2/sites-available/apache-vhost.conf /etc/apache2/sites-enabled/apache-vhost.conf
+# Copiar código da aplicação
+COPY --chown=deployer:deployer . /var/www/html
 
-################################################################################
-# Add normal user to get rid of pesky file ownership problems ##################
-################################################################################
+# Definir diretório de trabalho
+WORKDIR /var/www/html
 
-RUN PYTHON=$PYTHON:/usr/bin/python
-RUN export PYTHON
+# Instalar dependências do Composer
+USER deployer
+RUN composer install
 
-RUN groupadd deployer && useradd -g deployer deployer && \
-    sed -i.back 's/export APACHE_RUN_USER=www-data/export APACHE_RUN_USER=deployer/g' /etc/apache2/envvars && \
-    sed -i.back 's/export APACHE_RUN_GROUP=www-data/export APACHE_RUN_GROUP=deployer/g' /etc/apache2/envvars
+# Retornar ao usuário root
+USER root
 
+# Expor a porta 80
+EXPOSE 80
 
-RUN composer update
+# Comando para iniciar o Apache em primeiro plano
+CMD ["apache2-foreground"]

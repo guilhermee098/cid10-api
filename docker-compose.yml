@@ -1,22 +1,32 @@
-web:
-  container_name: cid10_api_web
-  build: .
-  volumes:
-    - .:/var/www/html
-  ports:
-    - "8080:80"
-  links:
-    - elasticsearch
-  environment:
-    - ENV='DEVELOPMENT'
-    - ELASTIC_SEARCH_HOSTNAME=${ELASTIC_SEARCH_HOSTNAME}
-    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-    - BASIC_AUTHENTICATION_USERNAME=${BASIC_AUTHENTICATION_USERNAME}
-    - BASIC_AUTHENTICATION_PASSWORD=${BASIC_AUTHENTICATION_PASSWORD}
+services:
+  web:
+    container_name: cid10_api_web
+    build: .
+    volumes:
+      - .:/var/www/html
+    ports:
+      - "8080:80"
+    depends_on:
+      - elasticsearch
+    environment:
+      ENV: "DEVELOPMENT"
+      ELASTIC_SEARCH_HOSTNAME: ${ELASTIC_SEARCH_HOSTNAME}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      BASIC_AUTHENTICATION_USERNAME: ${BASIC_AUTHENTICATION_USERNAME}
+      BASIC_AUTHENTICATION_PASSWORD: ${BASIC_AUTHENTICATION_PASSWORD}
+    networks:
+      - app-network
 
+  elasticsearch:
+    image: elasticsearch:5.6.16
+    container_name: cid10_api_elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+    networks:
+      - app-network
 
-elasticsearch:
-  image: library/elasticsearch
-  container_name: cid10_api_elasticsearch
-  ports:
-    - "9200:9200"
+networks:
+  app-network:
+    driver: bridge
